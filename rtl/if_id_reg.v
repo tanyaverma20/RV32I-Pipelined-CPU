@@ -1,0 +1,64 @@
+/*
+ * Copyright (c) 2026 Zhiyuan (Jerry) Jiang
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+`default_nettype none
+
+  module if_id_reg(
+
+    input wire clk,
+    input wire rst_n,
+
+    input wire flush,
+
+    input wire freeze,
+
+    input wire [31:0] instruction_in,
+    input wire [31:0] pc_in,
+    input wire [31:0] if_id_pc_plus_four_in,
+    input wire predicted_taken_in,
+    input wire [31:0] predicted_target_in,
+
+    output reg [31:0] instruction_out,
+    output reg [31:0] pc_out,
+    output reg [31:0] if_id_pc_plus_four_out,
+    output reg predicted_taken_out,
+    output reg [31:0] predicted_target_out
+ );
+
+
+ always @(posedge clk or negedge rst_n) begin
+
+   if (!rst_n) begin
+        instruction_out <= 32'h0000_0000;
+        pc_out <= 32'h0000_0000;
+        if_id_pc_plus_four_out <= 32'h0000_0000;
+        predicted_taken_out <= 1'b0;
+        predicted_target_out <= 32'h0000_0000;
+    end
+
+    else if (flush) begin
+        instruction_out <= 32'h0000_0000;
+        pc_out <= 32'h0000_0000;
+        if_id_pc_plus_four_out <= 32'h0000_0000;
+        predicted_taken_out <= 1'b0;
+        predicted_target_out <= 32'h0000_0000;
+    end
+
+    else if (!freeze) begin
+
+        pc_out <= pc_in;
+        instruction_out <= instruction_in;
+        if_id_pc_plus_four_out <= if_id_pc_plus_four_in;
+        predicted_taken_out <= predicted_taken_in;
+        predicted_target_out  <= predicted_target_in;
+
+    end
+    
+ end
+
+
+
+ endmodule
+ 

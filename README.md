@@ -1,0 +1,596 @@
+
+
+<img width="1702" height="630" alt="Copy of Entropic R32-SC" src="https://github.com/user-attachments/assets/908d10a9-2141-4303-b3ea-ecb1416155d1" />
+
+
+
+<h2 align="center">Entropic R32-P5 (RV32I 5-Stage Pipelined CPU on ASIC & FPGA)</h2>
+<p align="center">(image above is the real GDS render of the CPU on a SKY130 ASIC, Intel pls don't sue me for logo I'm just a fanboy 😢)</p>
+
+<div align="center">
+
+![RISC-V](https://img.shields.io/badge/riscv-%23283272.svg?style=for-the-badge&logo=riscv&logoColor=white) ![Static Badge](https://img.shields.io/badge/V-Verilog-blue?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/SV-SystemVerilog-darkblue?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/C-cocotb-yellow?style=for-the-badge)
+ ![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54) ![AssemblyScript](https://img.shields.io/badge/assembly-%23000000.svg?style=for-the-badge&logo=assemblyscript&logoColor=white) ![Static Badge](https://img.shields.io/badge/IV-Icarus%20Verilog-lightblue?style=for-the-badge)
+![Static Badge](https://img.shields.io/badge/OP2-OpenLane2-black?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/M-Makefile-orange?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/SKY-SKY130-blue?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/GCC-RISCV--GNU-red?style=for-the-badge)
+
+</div>
+
+
+>[!IMPORTANT]
+>Oct. 11th 2026
+>
+>**Contributed to, approved and listed on the official RISC-V International Learn GitHub Repository!! 🙀🙀**
+>- ***Entropic R32-P5*** under [🧩 Open RISC-V Implementations](https://github.com/riscv/learn?tab=readme-ov-file#-Open-RISC-V-Implementations)
+>
+>Sept. 1st 2026
+>- Posted to **r/RISCV** as seen [here](https://www.reddit.com/r/RISCV/comments/1w3x7w8/a_high_schoolers_attempt_at_a_cpu_5_stage_rv32i/)
+---
+
+**TL;DR**
+
+The processor implements all 40 RV32I base instructions, dynamic branch prediction using a 64-entry BTB with 2-bit saturating counters, three specialized forwarding paths, load-use hazard detection, branch flushing, and a real pipeline halt mechanism. Verified through staged SystemVerilog/RISC-V Assembly tests codriven with cocotb and  performance tested with compiled C programs, then taken through RTL-to-GDSII using OpenLane2 and SKY130. Final implementation achieves 50 MHz with 0 DRC violations, passing LVS, and setup/hold timing closure at the 20 ns target.
+
+---
+
+**Entropic R32-P5** is a 5-stage pipelined **RISC-V** (RV32I) CPU, the successor to my single-cycle [Entropic R32-SC](https://github.com/Entropify/Entropic_R32-SC_RISC-V), that was:
+- **designed** and **built completely from scratch** in **Verilog**, converting the original single-cycle datapath into a 5-stage IF/ID/EX/MEM/WB pipeline
+- extended with **full data forwarding**, **hazard detection/stalling**, **control-hazard flushing with branch resolution in ID**, and a **dynamic 2-bit saturating-counter branch predictor with a 64-entry BTB**
+- **fully verified** through **self-written testbenches** in **SystemVerilog** and **RISC-V Assembly**, co-driven by **cocotb**, plus **compiled C programs onto the CPU** for performance testing
+- **synthesized** to a **physical ASIC layout** through **OpenLane2** on the **SkyWater 130nm** open-source PDK, achieving **50 MHz**, a ~40% clock speed improvement over the single-cycle core
+- **throughput** comes out to be about **48.03 million** instructions per second for average real-world performance, and **39.37 million** instructions per second under worst-case scenarios (calculated with clock speed from [Results](#Results) and data from [Performance Benchmarks](#Performance-Benchmarks))
+
+`R32-P5` = **R**V**32**I, **P**ipelined, **5** stages.
+
+---
+
+## Table of Contents
+
+- [Architecture](#Architecture)
+- [GDS Render](#GDS-Render)
+- [Design](#Design)
+- [Pipeline Hazards & Forwarding](#Pipeline-Hazards--Forwarding)
+- [Branch Prediction](#Branch-Prediction)
+- [Real Halt Implementation](#Real-Halt-Implementation)
+- [Verification](#Verification)
+- [Performance Benchmarks](#Performance-Benchmarks)
+- [Major Debugging Findings](#Major-Debugging-Findings)
+- [ASIC Implementation](#ASIC-Implementation)
+- [FPGA Implementation](#FPGA-Implementation)
+- [Repository Structure](#Repository-Structure)
+- [Instruction Set Coverage](#Instruction-Set-Coverage)
+- [Future Plans](#Future-Plans)
+- [License](#License)
+- [Resources & Tools Used](#Resources--Tools-Used)
+
+---
+
+## Architecture
+
+Like my single cycle RV32I, `soc_top` wraps the pipelined core (`rv32i_core`) together with separate instruction (ROM) and data memory (RAM) modules, same top-level shape as the single-cycle design.
+
+### Microarchitecture diagram (zoom in if needed I know it's really small oof)
+
+*1. (diagram shows the entire of soc_top, with rv32i_core exposed to see its internal modules and logic, as well as data & instr mem)*
+
+*2. (modules are represented with sharp cornered double line rectangles, complex combinational logic are represented with rounded cornered double line rectangles with the Verilog code directly inside as breaking them down into individual logic gates would make the already complex diagram more unreadable logically)*
+
+*3. (all modules added to create / optimize the pipeline are colored in blue, but the wires / combinational logic to make said modules functional in rv32i_core are not colored)*
+
+*4. (all single bit wires are labeled with [0] / all vectors labeled with [width-1:0] for vectors used in their entirety; for sliced vectors it is labeled with the appropriate slicing syntax relative to the source, e.g. [15:7])*
+
+
+<img width="11640" height="7498" alt="pipeline drawio" src="https://github.com/user-attachments/assets/da7e49e8-0efc-4dfd-9b19-ddcb3b6df09d" />
+
+
+
+**Pipeline stages:**
+- **IF (Fetch):** Program Counter → Instruction Memory, with the branch predictor's read port consulted the same cycle to speculatively redirect fetch for previously-seen branches/jumps
+- **ID (Decode):** Control Unit + Immediate Generator + Register File read, **plus branch/jump resolution** (`branch_comp`, branch-target adder, and a dedicated `jalr` target adder), moved here from EX to cut the misprediction penalty from 2 cycles to 1
+- **EX (Execute):** ALU, fed by a dedicated EX-stage forwarding unit (`forwarding_unit`) resolving RAW hazards from EX/MEM and MEM/WB
+- **MEM (Memory Access):** Data Memory, Load Filter, Store Mask, plus a MEM-stage forwarding unit (`mem_forwarding_unit`) specifically for the `lw`-immediately-followed-by-`sw` case
+- **WB (Writeback):** A 2-way mux selects between memory-loaded data and an already-resolved "actual result" value (see [Major Debugging Findings](#Major-Debugging-Findings) for why this collapsed from a 4-way mux)
+
+**New pipeline registers:** `if_id_reg.v`, `id_ex_reg.v`, `ex_mem_reg.v`, `mem_wb_reg.v`, with appropriate ones supporting the `freeze`/`bubble`/`flush` control inputs intaking the stall and flush logic described below.
+
+---
+
+## GDS Render
+
+<img width="2559" height="1439" alt="Screenshot 2026-08-22 040723" src="https://github.com/user-attachments/assets/29c498a3-99ae-48d8-b702-417a8abe04fa" />
+
+
+*Visibly, the logic cells are not using the full area of the core. I described the reason behind this in later sections: [ASIC Implementation](#ASIC-Implementation), the **Known Limitation** section under that, and [Routing congestion tradeoff](#Routing-congestion-tradeoff).
+
+---
+
+## Design
+
+A few notable pipeline-specific design decisions (in addition to everything carried over from the single-cycle core):
+
+- **Branch/jump resolution moved to ID**, cutting the control-hazard penalty from 2 cycles (EX-stage resolution) to 1 cycle. This required its own forwarding path (`id_forwarding_unit`) since ID-stage resolution introduced a brand-new hazard case: a producer still live in EX (not yet even reached `ex_mem_reg`) feeding a consumer one stage earlier than any EX-stage consumer ever could. This also requires the hazard unit to account for this change, as stated in the next point.
+
+- **Two-tier load-use stall detection** in `hazard_unit`: the original EX-stage-load-into-ID-stage-consumer stall (sufficient for ALU consumers) plus a second, branch-specific stall condition catching a load that's advanced to MEM while a *branch* still needs it in ID, since branch resolution in ID needs the value one pipeline stage earlier than an ALU consumer would.
+
+- **`mem_to_reg`-resolved value collapse:** instead of carrying `alu_result`, `pc_plus_4`, and `imm_gen_out` as three separate raw values through `ex_mem_reg`/`mem_wb_reg` and re-deriving "which one is the real answer" at every consumer (EX forwarding, MEM forwarding, final writeback), the `mem_to_reg`-based resolution now happens once in EX and the *resolved* value is what gets latched forward. This was a real, STA-driven optimization, see [ASIC Implementation](#ASIC-Implementation).
+
+- **Two-stage halt latch:** `halted` (from `halt_d`, fires the instant `ecall`/`ebreak` is decoded in ID, freezing fetch immediately) and `fully_halted` (from `mem_wb_halt`, fires once the halt instruction actually travels through the entire pipeline and thus allowing any unfinished instructions to properly wrap up, this is what the top-level `halt` output reflects, giving external logic/testbenches a stable, permanent signal to check).
+
+
+### Module list (`rtl/`)
+
+Top modules: `soc_top.v` · `rv32i_core.v`
+
+Pipeline registers: `if_id_reg.v` · `id_ex_reg.v` · `ex_mem_reg.v` · `mem_wb_reg.v`
+
+Hazard/forwarding: `forwarding_unit.v` · `id_forwarding_unit.v` · `mem_forwarding_unit.v` · `hazard_unit.v`
+
+Branch prediction & control: `branch_predictor.v` · `halt_latch.v`
+
+Carried over, unmodified from R32-SC: `alu.v` · `alu_control.v` · `branch_comp.v` · `control_unit.v` · `data_mem.v` · `imm_gen.v` · `instruction_mem.v` · `load_filter.v` · `pc.v` · `reg_file.v` · `store_mask.v`
+
+---
+
+## Pipeline Hazards & Forwarding
+
+**Data hazards (RAW):** three separate, purpose-built forwarding units, each covering a different stage/consumer pairing:
+
+| Unit | Consumer | Candidates | Purpose |
+|---|---|---|---|
+| `forwarding_unit` | ALU operands in EX | EX/MEM, MEM/WB | Original Phase-2 forwarding; covers ordinary ALU-consuming instructions |
+| `id_forwarding_unit` | `branch_comp` / branch-target math in ID | live EX, EX/MEM | New candidate introduced by moving branch resolution to ID, the closest possible producer for a 0-NOP gap is now *still executing in EX*, not yet latched anywhere |
+| `mem_forwarding_unit` | Store data in MEM | MEM/WB | Specifically resolves `lw` immediately followed by `sw` using the same register, saving a stall |
+
+The MEM/WB-stage case (producer's writeback and consumer's read landing on the same cycle) is handled for free by `reg_file`'s own same-cycle write-first/read-second internal bypass mux.
+
+**Data hazards (load-use):** `hazard_unit` detects a load in EX (or, for branch consumers specifically, a load that's in EX or MEM) needing its result before it's ready, and stalls the pipeline by freezing `pc`/`if_id_reg` while inserting a bubble into `id_ex_reg`. This buying exactly enough cycles for forwarding to pick up the value once it's actually available.
+
+**Control hazards:** resolved via `flush`, gated on `!stall` (during a stall PC and ID/IF reg should be completely frozen) and on `mispredicted` (see below in [Branch Prediction](#Branch-Prediction)) rather than firing on every sinlge branch a CPU without dynamic branch predictor would, meaning a correctly-predicted branch causes **zero** flush.
+
+**x0 exclusion:** every forwarding/hazard comparator explicitly excludes `rd == x0` matches, verified with dedicated test cases confirming no accidental forwarding occurs into or out of the hardwired-zero register.
+
+---
+
+## Branch Prediction
+
+A from-scratch **2-bit saturating-counter predictor backed by a 64-entry, direct-mapped Branch Target Buffer (BTB)**.
+
+**Table structure**, indexed by `fetch_pc[7:2]` (6-bit index, 2 ^ 6 = 64 entries), tagged by `fetch_pc[31:8]` (24-bit tag, because 32 (address) - 6 (index) - 2 (bottom 2 bits omitted since instructions are byte-aligned) = 24), to detect and correctly handle index aliasing between unrelated branch addresses:
+- `valid`, has this slot ever been written
+- `tag`, confirms the entry actually belongs to this address, not an aliased collision
+- `target`, the last known branch/jump target for this address
+- `counter`, 2-bit saturating bias counter; top bit determines the taken/not-taken prediction
+
+**Update policy:** on a genuine tag match, the counter increments/decrements toward the observed outcome (saturating at `00`/`11`); on a fresh occupant (or aliased eviction), the counter resets to a weak bias matching that first real observation, rather than inheriting a previous occupant's unrelated history.
+
+**Misprediction detection & flush:** `mispredicted` compares the prediction carried through `if_id_reg` (`if_id_predicted_taken`/`target`) against the freshly-resolved ground truth in ID (`real_taken`/`real_target`). This covers both direction mispredicts and target mispredicts, and the compound case of directions agreeing but the *target* being wrong. `pc_next` is gated on `mispredicted` (not on `take_branch` directly) specifically to avoid a bug I found while writing RTL: redundantly re-targeting an already-correctly-predicted branch's own address a second time after it resolves (see [Major Debugging Findings](#Major-Debugging-Findings)).
+
+**Measured accuracy:** see [Performance Benchmarks](#Performance-Benchmarks). This ranges from ~60% on a deliberately worst-case alternating branch up to ~99.97% on predictable loops.
+
+---
+
+## Real Halt Implementation
+
+The single-cycle core's `halt` was purely an informational signal at WB. The core kept fetching and executing forever afterward, and every test program relied on a hand-written `beq x0,x0,halt` self-loop to stay stable.
+
+R32-P5 implements **real halt**: `ecall`/`ebreak` decoded in ID immediately and permanently freezes fetch (`halted`, sticky, latches on `halt_d`), while a second latch (`fully_halted`, on `mem_wb_halt`) only asserts once the halt instruction actually retires through the full pipeline. This guarantees every instruction scheduled before the halt has genuinely completed before the top-level `halt` output (driven by `fully_halted`) is trusted externally. `crt0.s` and every testbench now use `ecall` / `ebreak` as the real, hardware-enforced end-of-program convention.
+
+---
+
+## Verification
+
+### Module-level (SystemVerilog + Icarus Verilog + cocotb)
+
+Reused directly from the single-cycle design for every unmodified leaf module. New modules (`branch_predictor`, `hazard_unit`, `forwarding_unit`, `id_forwarding_unit`, `mem_forwarding_unit`, `halt_latch`) were verified via directed, full-branch-coverage assembly test cases integrated into the phase testbenches below, rather than standalone constrained-random testbenches. This is because each unit's functional surface (a handful of priority/comparator cases) is small enough that directed coverage is both sufficient and more informative than random sampling.
+
+### Full-core, phase-by-phase (Python cocotb + Icarus + Makefile + self-checking RISC-V Assembly)
+
+Each pipeline capability was built and verified as its own phase, each with a dedicated self-checking assembly program and cocotb driver. Each phase was built on previous phases and thus everything before is regression tested every single phase. 
+
+Error reporting system following the same error code in `x10` convention as the single-cycle core, but now expanded.
+
+| Phase | Capability verified |
+|---|---|
+| Phase 1 | Basic 5-stage datapath cut, no forwarding/hazard/flush (NOP-padded) |
+| Phase 2 | EX-stage forwarding, MEM-stage store forwarding, x0 exclusion, priority (EX/MEM over MEM/WB) |
+| Phase 3 | Load-use hazard detection and stalling, including back-to-back and branch-consumer cases |
+| Phase 4 | Control-hazard flushing, branch resolution moved to ID, zero-NOP taken/not-taken/`jal`/`jalr` correctness |
+| Phase 5 | Dynamic branch predictor: warm-up/steady-state accuracy, misprediction correcting ability |
+
+---
+
+
+***Example of a Phase 5 loop-warmup testbench measuring real per-iteration cycle cost (predictor cold-miss vs. steady-state):***
+
+<img width="2137" height="462" alt="image" src="https://github.com/user-attachments/assets/8c07be4b-ee90-46e5-9cdf-a42f88176e4d" />
+
+---
+
+
+***Example full core testbench generated waveform:***
+
+<img width="1070" height="997" alt="image" src="https://github.com/user-attachments/assets/e6013d0c-6124-4ade-8bf3-ae05abc3959c" />
+
+---
+
+***Full error reporting table showing every case tested:***
+<img width="818" height="1119" alt="Screenshot 2026-08-22 194811" src="https://github.com/user-attachments/assets/461b0001-a4b4-4852-b1df-9067b18488de" />
+<img width="819" height="1017" alt="Screenshot 2026-08-22 194823" src="https://github.com/user-attachments/assets/26706763-6749-4aee-b2ac-38015fb28033" />
+
+
+---
+
+
+### Compiled C toolchain
+
+Toolchain: RISC-V GCC (`-march=rv32i -mabi=ilp32 -nostdlib -nostartfiles`) compiles C source, a hand-written `crt0.s` initializes the stack pointer and calls `main()`, a custom linker script (`link.ld`) places `.text`/`.data` into the CPU's two separate physical memory spaces, and `objcopy -O verilog` produces the final `$readmemh`-format hex. This is the exact same .hex hand-written assembly tests have used since Phase 1, overwritten with new programs.
+
+First working program: a trivial `int main() { return 1 + 2; }`, verified using cocotb (`x10 == 3`) before moving to the loop-heavy benchmarks below.
+
+### Known limitations
+
+- Full-core differential testing against a reference ISA simulator (like Spike) is planned but not yet implemented.
+- The official [`riscv-arch-test`](https://github.com/riscv-non-isa/riscv-arch-test) compliance suite is not yet integrated. RISCOF requires a signature-dump testbench mechanism and target-specific macros that weren't built out in this CPU yet; individual official test files are a planned lighter-weight alternative.
+- A dedicated BTB-aliasing stress test (two colliding addresses, confirming tag-mismatch correctly falls back to a cold miss) was reasoned through and proven correct by construction (index+tag together reconstruct the full address) but not exercised with a purpose-built assembly test.
+
+---
+
+## Performance Benchmarks
+
+Five C programs, compiled with GCC with both flag `-O0` (unoptimized) and `-O2` (production-representative), each measuring CPI (cycles / approximate retired instructions, using stall/flush cycle counts as the correction term) and branch-prediction accuracy directly from live RTL signals (`mispredicted`, `stall`, `flush`) during simulation:
+
+| Test | Description | -O0 CPI | -O0 Accuracy | -O2 CPI | -O2 Accuracy |
+|---|---|---|---|---|---|
+| `loop1` | Simple counting loop (best case, highly predictable) | 1.200 | 99.95% | 1.000 | 99.96% |
+| `loop2` | Alternating `if/else` every iteration (near-worst-case for a 2-bit counter) | 1.296 | 59.99% | 1.000 | 99.97% |
+| `loop3` | Divisibility check via repeated-subtraction `mod()`, inlined 3x per iteration, called functions's interior iterations increases as dividend increases | 1.426 | 66.22% | 1.012 | 98.28% |
+| `loop4` | Period-4 branch pattern (`(i&3)!=3`) | 1.226 | 87.50% | 1.160 | 87.50% |
+| `fib(15)` | Recursive Fibonacci, stresses nested call/return stack usage | 1.227 | 67.11% | 1.032 | 76.54% |
+| **Average** | | **1.275** | **76.15%** | **1.041** | **92.45%** |
+
+**Notable findings from this benchmarking pass:**
+- `-O0` numbers are closer to a *hazard-logic stress test* than realistic performance, GCC keeps every loop variable in RAM, maximizing load-use stalls due to unoptimized assembly code; `-O2` numbers are closer to representative real-world performance.
+- `loop2`'s accuracy jump (60% → 99.97%) under `-O2` is because of GCC's loop unrolling restructured the alternating branch into a different, much more predictable control-flow pattern for the CPU entirely after inspecting the compiled assembly code. This is something completely new to me and I was genuinely impressed by this level of compiler optimization when I found out.
+- A naive `int main(){ for(...) count++; return count; }` loop is fully eliminated by `-O2` (calculating final value directly during compile time instead of running the loop) unless the loop variable is marked `volatile`. The first version of `loop1` completed in 14 cycles for exactly this reason before the fix.
+
+Overall, these testing showed me my CPU's level of performance, but more importantly allowed me to learn more about compiler optimization, compiler toolchain, and C language itself.
+
+---
+
+## Major Debugging Findings
+
+A few of the more substantial bugs I found and fixed during this project, worth documenting for hitting similar issues in the future:
+
+- **Forwarding Unit assumed `alu_result` was always the final answer that should be forwarded.** For `jal`/`jalr`/`lui`, the real writeback value is `pc_plus_4` or the raw immediate, not the ALU's output (which is meaningless for these instruction types, since their encodings reuse the `rs1`/`rs2` bit positions for other purposes). A `jal` immediately followed by `jalr` using its link register forwarded this garbage value, sending the CPU's PC to `0x0`. Fixed by building `ex_actual_result`/`ex_mem_actual_result` which are `mem_to_reg`-aware resolution wires and forwarding *those* instead of raw `alu_result` everywhere.
+
+- **A redundant PC re-target on correctly-predicted branches.** Before `pc_next` was gated on `mispredicted`, a correctly-predicted taken branch's own resolution in ID would still unconditionally re-select its branch target a second time, causing the very next instruction fetched by the predictor's correct speculation to be *re-fetched* a second time, causing potential data corruption and is not just a performance loss, caught by hand-tracing cycle-by-cycle PC values on paper before it ever showed up as a wrong testbench result.
+
+- **Single-bit-wide `reg array [0:63]` patterns are unreliable to synthesize.** `branch_predictor`'s `valid` array (1 bit per entry) crashed Yosys's partway through synthesis, while the wider `tag`/`target`/`counter` arrays synthesized cleanly. Yosys's per-element-unrolling fallback path for narrow arrays was unreliable. Fixed by flattening every array into a single wide vector (`reg [63:0] valid`, `reg [24*64-1:0] tag_flat`, indexed via `+:` part-selects) rather than using genuine multi-element arrays at all.
+
+- **OR-ing a synchronous signal into the same condition as an async reset breaks synthesis.** `if (!rst_n || flush)` mixes `rst_n` (async, in the sensitivity list) with `flush`/`bubble` (ordinary synchronous signals) in one combined condition confused Yosys (error message: `"Multiple edge sensitive events found for this signal!"`), even though Icarus simulated it correctly. Fixed by separating every pipeline register's reset logic into distinct `if (!rst_n) ... else if (bubble) ... else if (flush) ...` branches.
+
+- **A one-cycle race between `halt_d` and the sticky `halted` latch.** Since `halted` only updates on a clock edge, the exact cycle `ecall` is first decoded still has `halted == 0`, briefly allowing one more wrong-path fetch through before the freeze engages. I resolved this by including `halt_d` itself (the immediate, same-cycle signal) directly in `if_id_reg`'s/`pc`'s freeze and flush conditions, not just the one-cycle-delayed `halted`.
+
+- **A redundant `mem_to_reg` resolution, discovered via post-route STA.** The pipeline originally carried `alu_result`, `pc_plus_4`, and `imm_gen_out` as three separate raw values through `ex_mem_reg` and `mem_wb_reg`, re-deriving "which one is the real answer" via a 4-way `mem_to_reg` mux at every consumer that needed it: the EX/MEM forwarding candidate, the MEM-stage actual-result mux, and the final WB writeback mux each independently re-solved the identical question. Static timing analysis traced the design's critical path directly to this chain, starting at `ex_mem_reg`'s `mem_to_reg_out`. Fixed by resolving the value exactly once, in EX (`ex_actual_result`), and latching the *resolved* result into `ex_mem_reg` instead of the raw ALU output — collapsing both downstream muxes from 4-way down to 2-way, since only the genuinely-can't-resolve-early case (loads, whose data doesn't exist until MEM completes) still needs a real decision. Verified to produce identical final values for every instruction type before and after the change, and confirmed via a full ASIC re-run that the reported critical path shifted elsewhere entirely.
+
+---
+
+## ASIC Implementation
+
+Synthesized end-to-end (RTL → GDSII) using **OpenLane2** against the **SKY130** open-source PDK, run locally via WSL + Docker, same approach as the single-cycle core.
+
+### Synthesis strategy selection
+
+All nine available `SYNTH_STRATEGY` options were compared directly using OpenLane2's built-in `SynthesisExploration` flow at an initial 28 ns clock target, rather than assuming any one strategy would be best:
+
+| SYNTH_STRATEGY | Gates | Area (µm²) | Worst Setup Slack (ns) | Total -ve Setup Slack (ns) |
+|---|---|---|---|---|
+| AREA 0 | 19,703 | 284,406.5 | -14.34 | -3,608.30 |
+| AREA 1 | 19,866 | 284,178.8 | -9.36 | -2,321.80 |
+| AREA 2 | 19,465 | 281,498.7 | -12.53 | -3,831.75 |
+| **AREA 3** | **29,608** | **330,316.8** | **+7.24** | **0.0** |
+| DELAY 0 | 20,694 | 301,674.3 | -9.17 | -3,360.45 |
+| DELAY 1 | 20,348 | 297,328.9 | -11.64 | -914.95 |
+| DELAY 2 | 20,329 | 297,554.1 | -10.72 | -717.92 |
+| DELAY 3 | 20,502 | 299,627.4 | -14.63 | -1,240.08 |
+| DELAY 4 | 22,932 | 307,743.9 | -15.23 | -1,363.58 |
+
+`AREA 3` was the only strategy meeting timing at all. Despite the name, it apparently uses aggressive algebraic logic-collapsing that empirically outperformed every `DELAY` strategy for control-logic-heavy design  (like this pipelined CPU!).
+
+I came across this whilst researching OpenLane2 config optimization results, see the [research paper](https://www.preprints.org/frontend/manuscript/bb3f29f28a8f6c2645e902cb192138d6/download_pub) I found.
+
+The tradeoff, very ironically (`AREA 3` means most aggressively minimizing logic area in OpenLane2), is a substantially higher gate count, which directly caused the routing congestion issues described in **Routing congestion tradeoff** 2 sections below.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| Clock period | 20 ns |
+| Clock speed | 50 MHz *(~40% faster than the single-cycle core's 35.7 MHz)*|
+| Total cell count | 27,953 |
+| Flip-flops | 5,261 |
+| Wire count | 27,861 |
+| Total wire length | 3,032,556 μm (~3.03 m) |
+| Core Area | 1,287,160 µm² |
+| Logic Area | 376,233 µm² |
+| Core Utilization | 29.2% |
+| DRC | 0 violations |
+| LVS | Circuits match |
+| Setup & hold timing | Met at all corners @ 20 ns|
+
+
+### Routing congestion tradeoff
+
+`AREA 3`'s much higher gate count (~30k vs. ~19-23k for every other strategy) repeatedly triggered `GRT-0118` global routing congestion failures at the density settings that worked fine for other strategies. Resolving this took hours of ASIC flow runs with different combinations of config parameters and physical tradeoffs rather than a single fix:
+
+- `PL_TARGET_DENSITY` loosened to `0.35` and `FP_CORE_UTIL` to `25`, deliberately sacrificing die efficiency (down to ~29% utilization) to give the router physical room
+- `SYNTH_MAX_FANOUT`/`MAX_FANOUT_CONSTRAINT` widened to `16` (up from a much tighter, over-aggressive `4` tried earlier) to avoid an explosive buffer-tree cell-count increase
+- `PL_ROUTABILITY_DRIVEN` enabled, OpenROAD's placer-level congestion-aware cell inflation, targeting local hotspots directly rather than uniform density changes
+- `GRT_ADJUSTMENT` set to `0.3`, reserving explicit extra margin on routing tracks at the global-routing stage itself
+
+### Critical path optimization
+
+Post-route STA identified the critical path originating from `ex_mem_reg`'s `mem_to_reg_out`, propagating through a 4-way value-resolution mux that was being redundantly re-computed at three separate pipeline stages (see [Major Debugging Findings](#Major-Debugging-Findings)). Resolving the value once in EX and carrying the resolved result forward rather than re-deriving it at MEM and again at WB collapsed two of the three redundant 4-way muxes down to 2-way, directly shortening this path and making it no longer the critical path.
+
+A second, distinct critical path was subsequently identified through `mem_wb_rd_addr`'s address-comparison fanout (feeding both `forwarding_unit`'s and `reg_file`'s independent equality checks). This could be a candidate for future optimization rather than resolved in this pass, since it's structurally necessary comparison logic rather than a redundant computation.
+
+### Final OpenLane2 config.json setup
+
+```json
+{
+  "DESIGN_NAME": "rv32i_core",
+  "VERILOG_FILES": "dir::src/*.v",
+  "CLOCK_PORT": "clk",
+  "CLOCK_PERIOD": 20,
+  "PNR_SDC_FILE": "dir::src/constraint.sdc",
+  "SIGNOFF_SDC_FILE": "dir::src/constraint.sdc",
+  "SYNTH_STRATEGY": "AREA 3",
+  "SYNTH_SIZING": 1,
+  "DIODE_INSERTION_STRATEGY": 3,
+  "NUM_THREADS": 12,
+  "ROUTING_CORES": 12,
+  "KLAYOUT_XOR_THREADS": 12,
+  "SYNTH_MAX_FANOUT": 16,
+  "MAX_FANOUT_CONSTRAINT": 16,
+  "SYNTH_ABC_DFF": 1,
+  "PL_TARGET_DENSITY": 0.35,
+  "FP_CORE_UTIL": 25,
+  "GRT_ADJUSTMENT": 0.3,
+  "FP_ASPECT_RATIO": 1.0,
+  "PL_ROUTABILITY_DRIVEN": 1,
+  "PL_RESIZER_TIMING_OPTIMIZATIONS": 1,
+  "SYNTH_SHARE_RESOURCES": 0
+}
+```
+
+### Disassembled GDS render:
+
+<img width="2559" height="1439" alt="image" src="https://github.com/user-attachments/assets/5bc95c97-2f25-42d4-88d5-5287151d284e" />
+
+
+### Cell breakdown:
+
+| Category | Cell Types | Count |
+|---|---|---|
+| Combinational (AOI/OAI compound gates) | a2111o, a2111oi, a211o, a211oi, a21bo, a21boi, a21o, a21oi, a221o, a221oi, a22o, a22oi, a2bb2o, a2bb2oi, a311o, a31o, a31oi, a32o, a41o, o2111a, o2111ai, o211a, o211ai, o21a, o21ai, o21ba, o21bai, o221a, o221ai, o22a, o22ai, o2bb2a, o2bb2ai, o311a, o311ai, o31a, o31ai, o32a, o41a | 9,251 |
+| Flip-Flops | dfrtp | 5,261 |
+| NAND | nand2, nand2b, nand3, nand3b | 3,483 |
+| Buffer | buf, bufbuf, bufinv | 2,473 |
+| OR | or2, or2b, or3, or3b, or4, or4b | 2,200 |
+| NOR | nor2, nor3, nor3b | 1,384 |
+| Inverter | inv | 1,374 |
+| Multiplexer | mux2 | 1,357 |
+| AND | and2, and2b, and3, and3b, and4, and4b | 1,104 |
+| XOR/XNOR | xnor2, xor2 | 66 |
+| **Total** | | **27,953** |
+
+### Known limitations
+
+- Max slew / max cap violations remain in the `ss` (slow-slow) process corner, similar in category to the single-cycle core's residual signal-integrity findings. Thgis does not block DRC/LVS/timing signoff, but a real consideration for an actual fabricated chip.
+- Core utilization (~30%) is lower than the single-cycle design's 47.3%, which is the cost of choosing `AREA 3` for its timing win. Revisiting this would mean either accepting a larger die or finding a synthesis-strategy/RTL combination that gets `AREA 3`-level timing without `AREA 3`-level gate count. Or alternatively, more ASIC flow iterations for more fine tuned and optimized OpenLane2 configuration flags.
+
+---
+
+## FPGA Implementation
+
+*(in `fpga` branch)*
+
+Ported the same core to a **physical FPGA board**, an **AMD Xilinx Artix-7** (`xc7a35tcpg236-1`, Digilent Basys3), using **Vivado 2026.1**.
+
+The RTL is the **same `rtl/` tree** the ASIC run used, with only additive changes (below), so every cocotb phase test and the OpenLane2 flow still run against it unmodified. `R32-P5` on the board is the same microarchitecture as `R32-P5` on SKY130.
+
+### RTL changes for the board target
+
+- **`x10_debug` output port:** exposes the core's return code straight to the board LEDs. `led[15]` = halted, `led[7:0]` = `x10`. Every test program's existing error-code convention carries over from cocotb to hardware unchanged, so a passing program lights exactly two LEDs.
+- **`INSTR_MEM_FILE` parameter:** threaded from the board top level through `soc_top` into `instruction_mem`, so the instruction image path is absolute at synthesis time and relative in simulation. It has to be a parameter, because `$readmemh` resolves its path against the *Vivado process* working directory rather than the source file.
+- **`pc_debug` output port:** the fetch PC, added specifically so a wedged core could be located by eye during bring-up (a ~3 Hz sampled copy of it onto `led[15:0]`).
+- **Nothing else.** No pipeline stage, hazard unit, forwarding path, or predictor logic was touched for the board.
+
+### Clocking & reset
+
+- **50 MHz CPU clock.** The Basys3's onboard oscillator runs at 100 MHz (pin `W5`), which this design cannot close at: a 100 MHz attempt reports **-8.938 ns** worst setup slack on an 18.556 ns critical path, putting the core's real ceiling around **51 MHz**. The CPU instead runs on a divided clock. A register toggle plus a `BUFG`, constrained with `create_generated_clock -divide_by 2` on the `BUFG` output, so `cpu_clk` is a timed constraint rather than an inferred one.
+- **Reset, async-assert / sync-de-assert.** The first board build synchronised `btnC` on the 100 MHz input clock while the CPU ran on the divided 50 MHz clock, which means the CPU's flops were being released from reset **asynchronously to their own clock**. Rewritten so the button asserts reset immediately but de-asserts only after two `cpu_clk` edges, i.e. in the domain it actually resets. Simulation never caught this, because a testbench drives reset cleanly.
+
+### Board-level I/O: a memory-mapped UART
+
+The board target needed an output, so I added a peripheral following the SoC's existing shape: a new module under `rtl/`, instantiated in `soc_top`, never inside the memories.
+
+| Piece | Detail |
+|---|---|
+| Transmitter | `rtl/uart_tx.v` 8N1, LSB-first, `CLKS_PER_BIT = 434` (= 50 MHz / 115200) |
+| MMIO decode | `0x1000_0000`, decoded in `soc_top` off the same data bus the CPU already uses |
+| Register map | store → transmit the low 8 bits; load → `{31'b0, tx_busy}` for polling |
+| Physical pin | `A18` (`RsTx`) → the board's FT2232HQ USB-UART bridge → a virtual COM port on the PC |
+
+The address decode **gates the RAM strobes** (`ram_write = mem_write && !uart_sel`) and muxes the read path, so a UART access can never corrupt memory and the peripheral looks exactly like memory from the CPU's point of view, just `lw`/`sw` at a special address. `data_mem` and `instruction_mem` were not modified for this at all.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| Device | `xc7a35tcpg236-1` (AMD Xilinx Artix-7 35T) |
+| Tool | Vivado 2026.1 |
+| CPU clock period | 20 ns |
+| CPU clock speed | **50 MHz** (100 MHz board oscillator ÷ 2) |
+| Worst setup slack (WNS) | **+0.143 ns** *(best run: +0.732 ns)* |
+| Worst hold slack (WHS) | +0.035 ns |
+| Failing endpoints | **0** |
+| Slice LUTs | 7,288 / 20,800 (35.04%) |
+| Slice registers | 5,484 / 41,600 (13.18%) |
+| Block RAM tiles | **0** / 50 (0.00%) |
+| DSPs | 0 / 90 |
+| Bonded IOB | 19 / 106 (17.92%) |
+| BUFGCTRL | 2 / 32 (6.25%) |
+
+### Critical path optimization: synchronous data memory
+
+The data memory was purely combinational asynchronous read through a 1024-deep array, which on an FPGA becomes a deep, high-fanout distributed-RAM mux tree. That tree was the design's bottleneck, so I converted the data memory to a **synchronous read**, sampled one stage early:
+
+- the read address is now the **EX-stage ALU result**, so the addressed word is captured on the clock edge and available in **MEM** — exactly when the asynchronous version used to produce it. That keeps all load timing, forwarding, and hazard behaviour identical, which is what made the change safe to do without any pipeline restructuring.
+- two companion changes turned out to be mandatory: a **`read_enable`** gate (without it, a non-load instruction's arbitrary ALU result gets used as an address) and a **write-first/read-second bypass** (without it, a store in MEM and a load in EX of the same word returns the stale value).
+
+Measured in a separate 100 MHz-targeted experiment on the same RTL, this moved the critical path from **18.5 ns to 16.0 ns**. In the final 50 MHz board build the critical path no longer passes through either memory at all.
+
+### Compiled C on hardware
+
+The same `riscv64-unknown-elf-gcc` → `objcopy -O verilog` → `$readmemh` path used by the benchmark suite now targets the board, with the image baked into the instruction ROM at synthesis — compiler-generated code for all 40 instructions, including libgcc's software divide.
+
+To have something real to run, the board program is **Conway's Game of Life on a 20x20 field**, rendered as ASCII and redrawn in place over the UART (ANSI cursor-home, so it animates rather than scrolls) at roughly **25 frames per second** — a rate set by the UART itself (a frame is ~430 characters at 115200 baud ≈ 39 ms), not by the CPU.
+
+It is **verified against a native build**: the identical `life.c` compiled for x86 and run on the host produces output **byte-for-byte identical** to what the RISC-V core streams off the board (1,813 bytes compared). That is a much stronger claim than "it prints something plausible" — it says the core executed the compiled C correctly, division and all.
+
+### Board bring-up findings
+
+- **A wrong `$readmemh` path does not fail the build — it silently produces an empty ROM.** The CPU then executes `0x00000000` forever: no halt, dark LEDs, nothing on the UART. It looks exactly like a broken CPU, and I spent a long time debugging the core itself before finding the path string pointed at a folder that didn't exist. The synthesis log *does* report it (`INFO: [Synth 8-3876] $readmem data file '<path>' is read successfully`) — now the first thing I check on any board build.
+- **The instruction ROM and the data RAM are two separate 4 KB memories that both live at address `0x0`.** The CPU fetches from the ROM but reads data — `.rodata` string literals included — over the data bus, which lands in the RAM. With the RAM uninitialised, every string literal read garbage. Fixed by preloading `data_mem` with the same image the ROM uses, so `.rodata` genuinely exists in RAM at run time.
+- **A diagnostic build is easy to leave in.** I added the sampled-PC-on-LEDs readout while debugging the empty-ROM problem, and a later attempt to restore the normal LED mapping silently didn't take — so two subsequent bitstreams shipped displaying a program counter on the LEDs instead of the pass/fail code. Now I grep for the debug signal names before every release build.
+
+### Known limitations
+
+- **Both memories infer as distributed LUTRAM, not Block RAM** (0 of 50 BRAM tiles used). That is what makes the LUT count 35% rather than a few percent, and it is the direct motivation for the planned BRAM/writable-memory conversion.
+- **The FPGA timing margin is placement-dependent** at 50 MHz, as the run-to-run table shows. The honest reading is that this core "closes at 50 MHz" only just, and the root cause is the same branch-resolve loop described in the ASIC section — raising the ceiling needs a pipeline change, not more flow tuning.
+- **UART is transmit-only.** The CPU can print but not receive; there is no RX path, no interrupt, and no input of any kind yet.
+- **The program is frozen into the bitstream at synthesis.** Changing the C means recompiling the hex *and* re-running synthesis/implementation (~5 minutes), then reprogramming — there is no runtime loader yet. A UART bootloader into writable memory is the planned fix.
+- **The FPGA configuration is volatile** (SRAM-based, unlike the ASIC's permanent GDS), so the board must be reprogrammed after every power cycle.
+
+---
+
+## Repository Structure
+
+```
+|
+├── rtl/
+│   ├── rv32i_core.v            # Top level pipelined CPU module
+│   ├── if_id_reg.v             # IF/ID pipeline register (freeze/flush)
+│   ├── id_ex_reg.v             # ID/EX pipeline register (bubble)
+│   ├── ex_mem_reg.v            # EX/MEM pipeline register
+│   ├── mem_wb_reg.v            # MEM/WB pipeline register
+│   ├── forwarding_unit.v       # EX-stage forwarding (EX/MEM, MEM/WB)
+│   ├── id_forwarding_unit.v    # ID-stage (branch_comp) forwarding (live EX, EX/MEM)
+│   ├── mem_forwarding_unit.v   # MEM-stage store-data forwarding (specifically for lw followed by sw)
+│   ├── hazard_unit.v           # Load-use stall detection (two-tier)
+│   ├── branch_predictor.v      # 2-bit saturating counter + 64-entry BTB
+│   ├── halt_latch.v            # Sticky halt latch (used twice: halted, fully_halted)
+│   ├── data_mem.v              # RAM module
+│   ├── instruction_mem.v       # ROM module
+│   ├── soc_top.v               # SoC routing CPU with RAM and ROM
+│   └── all other .v files      # Unmodified modules from R32-SC
+├── sim/
+│   ├── phase_1/ .. phase_5/    # Each pipeline capability's Makefile + build dir
+│   ├── c_hello_world/          # First compiled-C bring-up: crt0.s, link.ld, Makefile
+│   ├── loop1/ .. loop4/, fib/  # Compiled-C benchmark folders (same crt0.s/link.ld pattern)
+│   └── cocotb_sim_*/           # Per-phase cocotb/Icarus build + waveform dump locations
+└── tb/
+    ├── modules/                # Per-module SystemVerilog testbenches (unmodified leaf modules)
+    ├── programs/               # Assembled/compiled program artifacts (.s/.c/.o/.elf/.hex)
+    └── top/                    # phase_1.py .. phase_5.py, phase_1.s .. phase_5.s, loop*.py, fib.py cocotb drivers
+```
+
+---
+
+## Instruction Set Coverage
+
+Like my single-cycle, full RV32I base instruction set. 40/40 instructions implemented but now correctly pipelined including forwarding/hazard handling for every instruction type.
+
+| Category | Instructions |
+|---|---|
+| Register-Immediate ALU | `ADDI` `SLTI` `SLTIU` `ANDI` `ORI` `XORI` `SLLI` `SRLI` `SRAI` |
+| Register-Register ALU | `ADD` `SUB` `SLL` `SLT` `SLTU` `SRL` `SRA` `XOR` `OR` `AND` |
+| Upper Immediate | `LUI` `AUIPC` |
+| Loads | `LB` `LH` `LW` `LBU` `LHU` |
+| Stores | `SB` `SH` `SW` |
+| Jumps | `JAL` `JALR` |
+| Branches | `BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU` |
+| System | `FENCE` `ECALL` `EBREAK` |
+
+Unlike the single-cycle core, `ECALL`/`EBREAK` now trigger a **real, permanent halt** that stops instruction fetch entirely (see in an earlier section, [Real Halt Implementation](#Real-Halt-Implementation)), rather than only raising an informational signal.
+
+`FENCE` remains implemented as a `NOP`.
+
+---
+
+
+## Future Plans
+
+- [ ] Official `riscv-arch-test` compliance suite via RISCOF, including a signature-dump testbench mechanism and target-specific `RVMODEL_*` macros
+- [ ] Full-core differential testing against a reference ISA simulator (Spike)
+- [ ] Resolve the `mem_wb_rd_addr` forwarding-comparator critical path identified in this pass
+- [ ] Optimize RTL to hopefully achieve 100 Mhz+ clock speed
+- [ ] Find a synthesis-strategy/RTL combination achieving `AREA 3`-level timing without its full gate-count/utilization cost
+- [ ] Dedicated BTB-aliasing stress test and local/global (tournament) branch prediction as a stretch goal
+- [x] FPGA implementation on an AMD Xilinx Artix-7, eventually building toward a VGA-driven SoC
+- [ ] Superscalar or out-of-order successor core
+
+---
+
+### Lastly, a to-scale comparison across all three of my tapeout projects built so far, cus it's fun :)
+
+(scale estimated through comparing standard filler cell sizes & met4 wire widths in Photopea)
+
+<img width="3125" height="3125" alt="chip comparison pic 5 stage" src="https://github.com/user-attachments/assets/5fb8975d-ee99-4ae4-a87e-d5a85c9b5d74" />
+
+
+---
+
+## License
+
+Apache-2.0, see [LICENSE](LICENSE)
+
+Copyright (c) 2026 Zhiyuan (Jerry) Jiang: frontend & backend VLSI, verification and documentation
+
+All credit for architectural and ISA specification goes to RISC-V International
+
+---
+
+## Resources & Tools Used
+
+Computer Organization and Design RISC-V Edition: The Hardware Software Interface - by David A Patterson and John L. Hennessy
+
+Digital Design and Computer Architecture, RISC-V Edition - by David Harris and Sarah Harris
+
+[Automated Parameter Tuning for Timing Closure in OpenROAD/OpenLane: A Comprehensive Multi-Design Grid Search Framework on the SkyWater 130 nm PDK](https://www.preprints.org/frontend/manuscript/bb3f29f28a8f6c2645e902cb192138d6/download_pub) - by Atair Rahman Alvi
+
+[RISC-V Instruction Encoder / Decoder](https://luplab.gitlab.io/rvcodecjs/) - by LupLab @ University of California, Davis
+
+[WebRISC-V](https://webriscv.altervista.org/) - by Gianfranco Mariotti
+
+[Interactive RISC-V Simulator](https://riscv-simulator-five.vercel.app/) - by Haoziwan
+
+[1.1 RV32I Base Integer Instruction Set, Version 2.1 (Unprivileged)](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html) - by RISC-V International
+
+[Icarus Verilog](https://github.com/steveicarus/iverilog) - by Stephen Williams
+
+[GTKWave](https://gtkwave.sourceforge.net/)
+
+[cocotb](https://www.cocotb.org/)
+
+[Windows Subsystem for Linux (WSL)](https://github.com/microsoft/WSL)
+
+[Docker](https://www.docker.com/)
+
+[OpenLane2](https://github.com/chipfoundry/openlane2)
+
+[Tiny Tapeout GDS Viewer](https://gds-viewer.tinytapeout.com/) - by Tiny Tapeout ltd.
+
+[Skywater 130 nm PDK](https://github.com/google/skywater-pdk) - by Google & Skywater Technology
+
+[GCC](https://gcc.gnu.org/)
