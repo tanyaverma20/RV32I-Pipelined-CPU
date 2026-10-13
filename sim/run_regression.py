@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-RV32I-Pipelined-CPU Automated Verification & Regression Suite
-Author: Tanya Verma (Enhanced Verification & Developer Infrastructure)
-Original Design: Zhiyuan (Jerry) Jiang (Apache-2.0)
+RV32I Pipelined CPU — RTL Verification & Simulation Infrastructure
+Maintainer & Verification Author: Tanya Verma (https://github.com/tanyaverma20/RV32I-Pipelined-CPU)
+Base Processor Architecture: Zhiyuan (Jerry) Jiang (Apache-2.0)
 
 Features:
   - 11 Submodule Directed & Constrained-Random Unit Tests

@@ -1,15 +1,28 @@
-# RV32I-Pipelined-CPU
+# RV32I Pipelined CPU — RTL Verification & Simulation Infrastructure
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/Architecture-RISC--V%20RV32I-red.svg)](https://riscv.org/)
 [![Pipeline](https://img.shields.io/badge/Pipeline-5--Stage%20(IF--ID--EX--MEM--WB)-orange.svg)]()
-[![Simulation](https://img.shields.io/badge/Simulator-Icarus%20Verilog%20%2F%20cocotb-green.svg)](https://github.com/steveicarus/iverilog)
+[![Simulation](https://img.shields.io/badge/Simulator-Icarus%20Verilog-green.svg)](https://github.com/steveicarus/iverilog)
 [![Regression](https://img.shields.io/badge/Regression-100%25%20Passing%20(21%2F21)-brightgreen.svg)]()
+[![Maintainer](https://img.shields.io/badge/Maintainer-Tanya%20Verma-blueviolet.svg)](https://github.com/tanyaverma20)
 [![ASIC](https://img.shields.io/badge/Physical%20Design-OpenLane2%20%2F%20Sky130-purple.svg)](https://github.com/The-OpenROAD-Project/OpenLane)
 
-A fully-featured, 5-stage pipelined 32-bit RISC-V (RV32I) microprocessor core implemented in synthesizable Verilog, complete with dynamic branch prediction, comprehensive data forwarding, two-tier hazard detection/stalling, and hardware halt retirement.
+**Maintainer & Verification Author:** [Tanya Verma](https://github.com/tanyaverma20)<br>
+**Repository:** [https://github.com/tanyaverma20/RV32I-Pipelined-CPU](https://github.com/tanyaverma20/RV32I-Pipelined-CPU)<br>
+**Base Processor Architecture:** [Zhiyuan (Jerry) Jiang](https://github.com/JerryJiang777) (Apache-2.0 License)
 
-This repository features a verification framework, automated Python regression testing, directed SystemVerilog testbenches, and compiled C workloads, tailored for hardware/software co-verification and Electronic Design Automation (EDA) engineering standards.
+---
+
+## Overview
+
+**RV32I Pipelined CPU — RTL Verification & Simulation Infrastructure** is a verified 5-stage pipelined 32-bit RISC-V microprocessor core accompanied by a standalone, automated Electronic Design Automation (EDA) verification framework. The project emphasizes RTL simulation semantics, IEEE 1800-2012 SystemVerilog compliance, cycle-accurate microarchitectural hazard analysis, and cross-platform regression automation.
+
+The repository features:
+- **Core Microarchitecture:** Synthesizable in-order 5-stage pipeline (`IF` $\to$ `ID` $\to$ `EX` $\to$ `MEM` $\to$ `WB`) with 1-cycle decode-stage branch resolution, a 64-entry 2-bit bimodal branch target buffer (BTB), three-tier operand forwarding, and hardware load-use hazard stalling.
+- **Verification & Automation Infrastructure:** A unified self-checking SystemVerilog testbench (`tb_soc_top.sv`) with dynamic firmware loading and architectural assertion decoding, driven by an automated Python regression harness (`run_regression.py`) validating 21 test suites in under 18 seconds.
+- **Bare-Metal Software Co-Design:** End-to-end GNU toolchain flow (`riscv64-unknown-elf-gcc`, `crt0.s`, custom Harvard linker script `link.ld`) compiling and running real C workloads, including recursive Fibonacci and stress loops.
+- **Physical Feasibility:** Fully synthesized, placed, and routed via OpenLane2 on the SkyWater 130nm PDK at 50 MHz with zero timing violations.
 
 ---
 
@@ -35,7 +48,7 @@ This repository features a verification framework, automated Python regression t
 - [Engineering Challenges & Bug Fixes](#engineering-challenges--bug-fixes)
 - [Physical Implementation (ASIC & FPGA)](#physical-implementation-asic--fpga)
 - [Known Limitations & Roadmap](#known-limitations--roadmap)
-- [Provenance & Engineering Contributions](#provenance--engineering-contributions)
+- [Maintainer, Provenance & Engineering Contributions](#maintainer-provenance--engineering-contributions)
 - [References & License](#references--license)
 
 ---
@@ -507,22 +520,26 @@ During the technical audit and verification overhaul of this project, several cr
 
 ---
 
-## Provenance & Engineering Contributions
+## Maintainer, Provenance & Engineering Contributions
 
-### Architectural Provenance
-- **Original Implementation:** The base single-cycle and initial pipelined microarchitecture were originally developed by **Zhiyuan (Jerry) Jiang** (2026), released under the Apache-2.0 License.
-- **ISA Specification:** Credit for the RISC-V instruction-set architecture belongs to **RISC-V International**.
+### Project Maintainer
+**Tanya Verma** ([@tanyaverma20](https://github.com/tanyaverma20))<br>
+*Computer Engineering Student | Focus: Electronic Design Automation (EDA), RTL Verification, Computer Architecture, Systems Programming.*
 
-### Independent Contributions by Tanya Verma
-This repository has been audited, modified, and enhanced as part of my Computer Engineering portfolio preparing for the **Siemens EDA Student Intern — Software Profile**:
+### Documented Engineering Contributions by Tanya Verma
+This repository has been audited, modernized, and equipped with a verification and developer infrastructure as part of my Computer Engineering portfolio preparing for the **Siemens EDA Student Intern — Software Profile**:
 1. **IEEE 1800-2012 Elaboration Refactoring:** Diagnosed and resolved 47 elaboration errors in `rtl/rv32i_core.v` caused by forward-referenced signals under `` `default_nettype none ``, bringing the RTL into full compliance with industry EDA simulation standards.
-2. **Submodule Bug Fixes:**
-   - Diagnosed and resolved the unconnected `freeze` port bug in `tb/modules/tb_pc.sv`, adding dedicated stall-freeze verification.
+2. **Submodule Testbench Bug Fixes:**
+   - Diagnosed and resolved the unconnected `freeze` port bug in `tb/modules/tb_pc.sv`, adding dedicated stall-freeze verification (Test 5).
    - Resolved the relative hex path mismatch in `tb/modules/tb_instruction_mem.sv`, ensuring robust execution from both project root and `sim/` working directories.
-3. **Standalone Verification Infrastructure (`tb_soc_top.sv`):** Developed a top-level SystemVerilog testbench supporting dynamic hex loading (`+HEX`), cycle-accurate metric collection, legacy loop detection, and automatic error code decoding.
-4. **Automated Regression Suite (`sim/run_regression.py`):** Authored an end-to-end Python test runner covering 11 submodules, 6 core phases, and 4 C benchmarks with colorized reports and CI/CD return codes.
-5. **Pre-Compiled Hex Binary Generation:** Generated and verified `.hex` program images for all 6 core integration phases and compiled C workloads, enabling zero-setup reproducibility.
-6. **Documentation & Technical Presentation:** Authored complete technical documentation, architecture flowcharts, hazard tables, and empirical benchmark logs.
+3. **Standalone Verification Infrastructure (`tb_soc_top.sv`):** Developed a unified top-level SystemVerilog testbench supporting dynamic hex loading (`+HEX`), cycle-accurate metric collection (cycles, stalls, flushes, branch prediction accuracy), sliding-window terminal loop detection, and automatic decoding of 47 architectural diagnostic error codes.
+4. **Automated Cross-Platform Regression Suite (`sim/run_regression.py`):** Authored an end-to-end Python test runner orchestrating 11 submodules, 6 core assembly phases, and 4 C benchmarks with colorized reports, execution timing, and CI/CD return codes (100% pass rate in 17.71 seconds).
+5. **Firmware Workload & Hex Generation:** Assembled, linked, and verified `.hex` program images for all 6 core integration phases and compiled bare-metal C workloads (`loop1`–`loop4`, `fib`, `hello_world`), enabling zero-setup reproducibility.
+6. **Technical Documentation & Specifications:** Authored comprehensive technical documentation, architecture flowcharts, hazard tables, empirical benchmark logs, and the exhaustive `CONTEXT.md` specification.
+
+### Base Architectural Provenance
+- **Original Implementation:** The base single-cycle and initial pipelined microarchitecture were originally developed by **Zhiyuan (Jerry) Jiang** (2026), released under the Apache-2.0 License.
+- **ISA Specification:** The RISC-V instruction-set architecture is specified and maintained by **RISC-V International**.
 
 ---
 

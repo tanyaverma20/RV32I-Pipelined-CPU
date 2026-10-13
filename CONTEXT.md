@@ -1,6 +1,8 @@
-# CONTEXT.md: RV32I-Pipelined-CPU Technical Reference & Repository Context
+# CONTEXT.md: RV32I Pipelined CPU — RTL Verification & Simulation Infrastructure
 
-> **Document Purpose:** This document serves as the exhaustive, single-source-of-truth technical context for the **RV32I-Pipelined-CPU** repository. It is specifically designed to allow an external AI system or technical evaluator—with no direct filesystem access to the codebase—to reason with complete precision about the project's digital design, microarchitecture, RTL implementation, verification methodology, software toolchain, developer infrastructure, physical ASIC synthesis, and engineering provenance.
+> **Document Purpose:** This document serves as the exhaustive, single-source-of-truth technical context for the **RV32I Pipelined CPU — RTL Verification & Simulation Infrastructure** repository ([https://github.com/tanyaverma20/RV32I-Pipelined-CPU](https://github.com/tanyaverma20/RV32I-Pipelined-CPU)).<br>
+> **Maintainer & Verification Author:** Tanya Verma<br>
+> **Base Processor Architecture:** Zhiyuan (Jerry) Jiang (Apache-2.0 License)
 
 ---
 

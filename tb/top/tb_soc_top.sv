@@ -1,5 +1,9 @@
 /*
- * RV32I-Pipelined-CPU Top-Level Self-Checking Testbench
+ * RV32I Pipelined CPU — RTL Verification & Simulation Infrastructure
+ * Top-Level Self-Checking SystemVerilog Testbench
+ *
+ * Maintainer & Verification Author: Tanya Verma (https://github.com/tanyaverma20/RV32I-Pipelined-CPU)
+ * Base Processor Architecture: Zhiyuan (Jerry) Jiang (Apache-2.0)
  *
  * Provides a unified, standalone, reproducible verification environment
  * capable of running all test phases (phase 1 - 5), universal test (tb_top_soc),
