@@ -1,2 +1,15 @@
-
+# Waveforms
 *.vcd
+*.fst
+
+# Compiled simulation binaries
+*.vvp
+sim/*.vvp
+
+# Python artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Temporary run logs
+*.log

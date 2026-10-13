@@ -25,7 +25,22 @@
   );
 
 
+  // Global pipeline hazard and cross-stage feedback nets
   wire stall;
+  wire flush;
+  wire halt_d;
+  wire halted;
+  wire branch_d;
+  wire [1:0] pc_src_d;
+  wire real_taken;
+  wire [31:0] real_target;
+  wire [4:0] id_ex_rd_addr;
+  wire id_ex_reg_write;
+  wire [4:0] ex_mem_rd_addr;
+  wire ex_mem_reg_write;
+  wire ex_mem_mem_read;
+  wire [31:0] ex_actual_result;
+  wire [31:0] ex_mem_actual_result;
 
 // IF stage
 
@@ -45,9 +60,15 @@
     .freeze(stall || halted || halt_d)
   );
 
-wire predict_taken;
-wire [31:0] predict_target;
+// IF/ID signals
+  wire [31:0] if_id_instruction;
+  wire [31:0] if_id_pc;
+  wire [31:0] if_id_pc_plus_4;
+  wire if_id_predicted_taken;
+  wire [31:0] if_id_predicted_target;
 
+  wire predict_taken;
+  wire [31:0] predict_target;
 
   branch_predictor cpu_branch_predictor(
     .clk(clk),
@@ -62,17 +83,6 @@ wire [31:0] predict_target;
     .update_taken(real_taken),
     .update_target(real_target)
   );
-
-
-// IF/ID
-
-
-  wire [31:0] if_id_instruction;
-  wire [31:0] if_id_pc;
-  wire [31:0] if_id_pc_plus_4;
-
-  wire if_id_predicted_taken;
-  wire [31:0] if_id_predicted_target;
 
   if_id_reg cpu_if_id (
     .clk(clk),
@@ -100,8 +110,8 @@ wire [31:0] predict_target;
 
 
 
-  wire branch_d, mem_read_d, mem_write_d, alu_src1_d, alu_src2_d, reg_write_d, halt_d;
-  wire [1:0] mem_to_reg_d, alu_op_d, pc_src_d;
+  wire mem_read_d, mem_write_d, alu_src1_d, alu_src2_d, reg_write_d;
+  wire [1:0] mem_to_reg_d, alu_op_d;
 
   control_unit cpu_control (
     .control_in(if_id_instruction[6:0]),
@@ -116,8 +126,6 @@ wire [31:0] predict_target;
     .pc_src(pc_src_d),
     .halt(halt_d)
   );
-
-  wire halted;
 
   halt_latch cpu_halt_latch(
     .clk(clk),
@@ -223,40 +231,30 @@ wire [31:0] predict_target;
     .take_branch(take_branch_signal)
   );
 
- wire [31:0] real_target = (pc_src_d == 2'b10) ? {jalr_target_full[31:1], 1'b0} : pc_branch_target;
- wire real_taken = take_branch || (pc_src_d == 2'b10) || (pc_src_d == 2'b01);
+  wire take_branch = branch_d && take_branch_signal;
+  wire [31:0] pc_branch_target = if_id_pc + imm_gen_out_d;
+  wire [31:0] jalr_target_full = branch_comp_1 + imm_gen_out_d; //uses same forwarding branch comp uses
+
+  assign real_target = (pc_src_d == 2'b10) ? {jalr_target_full[31:1], 1'b0} : pc_branch_target;
+  assign real_taken = take_branch || (pc_src_d == 2'b10) || (pc_src_d == 2'b01);
  
   wire mispredicted = (if_id_predicted_taken != real_taken) ||
                      (if_id_predicted_taken && real_taken && (if_id_predicted_target != real_target));
-
-  wire take_branch = branch_d && take_branch_signal;
-  wire [31:0] pc_branch_target = if_id_pc + imm_gen_out_d;
-
-  wire [31:0] jalr_target_full = branch_comp_1 + imm_gen_out_d; //uses same forwarding branch comp uses
-
-  // resolved in id now so penalty cycle is only 1, this feeds all the way back to the pc mux in if
- /* assign pc_next = (take_branch || pc_src_d == 2'b01) ? pc_branch_target :
-  (pc_src_d == 2'b10) ? {jalr_target_full[31:1], 1'b0} : 
-  (predict_taken) ? predict_target : pc_plus_4;
-  */
 
   assign pc_next = mispredicted
     ? (real_taken ? real_target : if_id_pc_plus_4)
     : (predict_taken ? predict_target : pc_plus_4);
 
-
-//wire flush = !stall && (take_branch || pc_src_d == 2'b01 || pc_src_d == 2'b10 || pc_next != pc_plus_4);
- 
-    wire flush = !stall && mispredicted;
+  assign flush = !stall && mispredicted;
 
 // ID/EX
 
 
   wire [31:0] id_ex_read_data1, id_ex_read_data2, id_ex_imm_gen_out;
   wire [31:0] id_ex_pc, id_ex_pc_plus_4;
-  wire [4:0] id_ex_rs1_addr, id_ex_rs2_addr, id_ex_rd_addr;
+  wire [4:0] id_ex_rs1_addr, id_ex_rs2_addr;
   wire id_ex_branch, id_ex_mem_read, id_ex_mem_write;
-  wire id_ex_alu_src1, id_ex_alu_src2, id_ex_reg_write, id_ex_halt;
+  wire id_ex_alu_src1, id_ex_alu_src2, id_ex_halt;
   wire [1:0] id_ex_mem_to_reg, id_ex_alu_op, id_ex_pc_src;
   wire [2:0] id_ex_func3;
   wire id_ex_func7;
@@ -355,9 +353,9 @@ wire [31:0] predict_target;
     .forward_src2(forward_src2)
   );
 
-  wire [31:0] ex_actual_result = (id_ex_mem_to_reg == 2'b10) ? id_ex_pc_plus_4 :
-                                (id_ex_mem_to_reg == 2'b11) ? id_ex_imm_gen_out :
-                                alu_result;
+  assign ex_actual_result = (id_ex_mem_to_reg == 2'b10) ? id_ex_pc_plus_4 :
+                            (id_ex_mem_to_reg == 2'b11) ? id_ex_imm_gen_out :
+                            alu_result;
 
   always @(*) begin
 
@@ -430,9 +428,8 @@ wire [31:0] predict_target;
 
   wire [31:0] ex_mem_alu_result, ex_mem_read_data2;
   wire [31:0] ex_mem_pc_plus_4, ex_mem_imm_gen_out;
-  wire [4:0] ex_mem_rd_addr;
   wire [2:0] ex_mem_func3;
-  wire ex_mem_mem_read, ex_mem_mem_write, ex_mem_reg_write, ex_mem_halt;
+  wire ex_mem_mem_write, ex_mem_halt;
   wire [1:0] ex_mem_mem_to_reg;
   wire [4:0] ex_mem_rs2_addr;
 
@@ -486,7 +483,7 @@ wire [31:0] predict_target;
     .sel(mem_forward_sel)
   );
 
-  wire [31:0] ex_mem_actual_result = (ex_mem_mem_to_reg == 2'b01) ? filtered_data : ex_mem_alu_result;
+  assign ex_mem_actual_result = (ex_mem_mem_to_reg == 2'b01) ? filtered_data : ex_mem_alu_result;
 
   load_filter cpu_load_filter(
     .func3(ex_mem_func3),

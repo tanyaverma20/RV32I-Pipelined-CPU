@@ -18,6 +18,7 @@ module tb_pc;
 
     logic clk;
     logic rst_n;
+    logic freeze;
     logic [31:0] pc_in;
     
     logic [31:0] pc_out;
@@ -26,6 +27,7 @@ module tb_pc;
     pc dut (
         .clk(clk),
         .rst_n(rst_n),
+        .freeze(freeze),
         .pc_in(pc_in),
         .pc_out(pc_out)
     );
@@ -45,6 +47,7 @@ module tb_pc;
 
         //clearing chip signals
         rst_n = 1'b0;
+        freeze = 1'b0;
         pc_in = 32'd0;
         #20; 
 
@@ -110,6 +113,29 @@ module tb_pc;
             $fatal(1, "Error: Branch update failed. Expected FADED420, got %h", pc_out);
         end
 
+        //test 5 pipeline freeze behavior
+        $display("Test 5: Pipeline Stall Freeze");
+        freeze = 1'b1;
+        pc_in = 32'h12345678;
+        @(posedge clk);
+        #1;
+
+        assert (pc_out == 32'hFADED420) begin
+            $display("Test 5 passed");
+        end 
+        else begin
+            $fatal(1, "Error: Freeze failed. Expected PC to hold FADED420, got %h", pc_out);
+        end
+
+        freeze = 1'b0;
+        @(posedge clk);
+        #1;
+        assert (pc_out == 32'h12345678) begin
+            $display("Test 5 unfreeze passed");
+        end 
+        else begin
+            $fatal(1, "Error: Unfreeze failed. Expected PC to update to 12345678, got %h", pc_out);
+        end
 
         $display("All Program Counter tests successful, use 'gtkwave tb_pc.vcd tb_pc.gtkw' to open waveform.");
         

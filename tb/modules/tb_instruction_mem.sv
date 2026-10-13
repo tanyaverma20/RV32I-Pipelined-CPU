@@ -44,8 +44,21 @@ module tb_instruction_mem;
         #20; 
 
 
-        //load the exact same hex file into the testbench's memory
-        $readmemh("../tb/programs/tb_program.hex", expected_rom);
+        //load hex file into testbench shadow memory and dut rom
+        begin
+            integer fd;
+            string hex_path;
+            hex_path = "tb/programs/tb_program.hex";
+            fd = $fopen("tb/programs/tb_program.hex", "r");
+            if (fd != 0) begin
+                $fclose(fd);
+                hex_path = "tb/programs/tb_program.hex";
+            end else begin
+                hex_path = "../tb/programs/tb_program.hex";
+            end
+            $readmemh(hex_path, expected_rom);
+            $readmemh(hex_path, dut.rom);
+        end
 
 
         $display("Starting Dynamic Instruction Memory tests...");
